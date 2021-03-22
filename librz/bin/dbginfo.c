@@ -16,55 +16,78 @@ RZ_API void rz_bin_source_row_free(RzBinSourceRow *row) {
 }
 /// !!!!!!!!!!!!!!!!!!!!!!111!!!!!!!!!!!!!!!11
 
-static void source_file_fini(RzBinSourceFile *sf, void *user) {
-	free(sf->file);
-}
-
 RZ_API void rz_bin_source_line_info_builder_init(RzBinSourceLineInfoBuilder *builder) {
-	rz_vector_init(&builder->files, sizeof(RzBinSourceFile), (RzVectorFree)source_file_fini, NULL);
-	rz_vector_init(&builder->lines, sizeof(RzBinSourceLine), NULL, NULL);
+	rz_vector_init(&builder->samples, sizeof(RzBinSourceLineSample), NULL, NULL);
+	rz_str_constpool_init(&builder->filename_pool);
 }
 
 RZ_API void rz_bin_source_line_info_builder_fini(RzBinSourceLineInfoBuilder *builder) {
-	rz_vector_fini(&builder->files);
-	rz_vector_fini(&builder->lines);
-}
-
-/**
- * \param file may be NULL, see RzBinSourceFile for exact meaning
- */
-RZ_API void rz_bin_source_line_info_builder_push_file_sample(RzBinSourceLineInfoBuilder *builder, ut64 address, RZ_NULLABLE const char *file) {
-	RzBinSourceFile *sample = rz_vector_push(&builder->files, NULL);
-	if (!sample) {
-		return;
-	}
-	sample->address = address;
-	sample->file = file ? strdup(file) : NULL;
+	rz_vector_fini(&builder->samples);
+	rz_str_constpool_fini(&builder->filename_pool);
 }
 
 /**
  * \param line may be 0 or a positive line number, see RzBinSourceLine for exact meaning
  */
-RZ_API void rz_bin_source_line_info_builder_push_line_sample(RzBinSourceLineInfoBuilder *builder, ut64 address, ut32 line, ut32 column) {
-	RzBinSourceLine *sample = rz_vector_push(&builder->lines, NULL);
+RZ_API void rz_bin_source_line_info_builder_push_sample(RzBinSourceLineInfoBuilder *builder, ut64 address, ut32 line, ut32 column, const char *file) {
+	RzBinSourceLineSample *sample = rz_vector_push(&builder->samples, NULL);
 	if (!sample) {
 		return;
 	}
 	sample->address = address;
 	sample->line = line;
-	sample->column = column;
+	if (line) {
+		sample->column = column;
+		sample->file = file ? rz_str_constpool_get(&builder->filename_pool, file) : NULL;
+	} else {
+		sample->column = 0;
+		sample->file = NULL;
+	}
 }
 
-static int file_cmp(const void *a, const void *b) {
-	const RzBinSourceFile *fa = a;
-	const RzBinSourceFile *fb = b;
-	return fa->address < fb->address ? -1 : (fa->address > fb->address ? 1 : 0);
-}
-
-static int line_cmp(const void *a, const void *b) {
-	const RzBinSourceLine *fa = a;
-	const RzBinSourceLine *fb = b;
-	return fa->address < fb->address ? -1 : (fa->address > fb->address ? 1 : 0);
+static int line_sample_cmp(const void *a, const void *b) {
+	const RzBinSourceLineSample *sa = a;
+	const RzBinSourceLineSample *sb = b;
+	// first, sort by addr
+	if (sa->address < sb->address) {
+		return -1;
+	}
+	if (sa->address > sb->address) {
+		return 1;
+	}
+	// closing samples are always equal (rest of their fields are ignored anyway)
+	if (!sa->line && !sb->line) {
+		return 0;
+	}
+	// push closing samples to the back, which is necessary to skip them during packing
+	if (!sa->line) {
+		return 1;
+	}
+	// then sort by line
+	if (sa->line < sb->line) {
+		return -1;
+	}
+	if (sa->line > sb->line) {
+		return 1;
+	}
+	// then by column
+	if (sa->column < sb->column) {
+		return -1;
+	}
+	if (sa->column > sb->column) {
+		return 1;
+	}
+	// and eventually by file because this is the most exponsive operation
+	if (!sa->file && !sb->file) {
+		return 0;
+	}
+	if (!sa->file) {
+		return -1;
+	}
+	if (!sb->file) {
+		return 1;
+	}
+	return strcmp(sa->file, sb->file);
 }
 
 RZ_API RzBinSourceLineInfo *rz_bin_source_line_info_builder_build_and_fini(RzBinSourceLineInfoBuilder *builder) {
@@ -72,177 +95,42 @@ RZ_API RzBinSourceLineInfo *rz_bin_source_line_info_builder_build_and_fini(RzBin
 	if (!r) {
 		goto err;
 	}
-	size_t initial_files_count = rz_vector_len(&builder->files); // final count may be less after removing dups
-	if (initial_files_count) {
-		r->files = RZ_NEWS0(RzBinSourceFile, initial_files_count);
-		if (!r->files) {
+	size_t initial_samples_count = rz_vector_len(&builder->samples); // final count may be less after removing unnecessary closing samples
+	if (initial_samples_count) {
+		r->samples = RZ_NEWS0(RzBinSourceLineSample, initial_samples_count);
+		if (!r->samples) {
 			goto err_r;
 		}
-	}
-	size_t initial_lines_count = rz_vector_len(&builder->lines); // final count may be less after removing dups
-	if (initial_lines_count) {
-		r->lines = RZ_NEWS0(RzBinSourceLine, rz_vector_len(&builder->lines));
-		if (!r->lines) {
-			goto err_files;
-		}
-	}
 
-	// samples should be built in flat RzVector to avoid excessive small mallocs,
-	// for sorting we use a pvector with references into our flat vectors (after flushing them).
+		// samples should be built in flat RzVector to avoid excessive small mallocs,
+		// for sorting we use a pvector with references into our flat vectors (after flushing them).
 
-	if (initial_files_count) {
-		// pack the files.
-		// as an example, this loop would transform this:
-		//
-		//  - 0x100 "middleville.c" // starting at addr 0x100, there is "middleville.c"
-		//  - 0x150 "middleville.c" // starting at addr 0x150, there is "middleville.c"
-		//  - 0x200 NULL            // the previous "middleville.c" ends at 0x200
-		//  - 0x200 "middleville.c" // starting at addr 0x200, there is "middleville.c"
-		//  - 0x300 NULL            // the previous "middleville.c" ends at 0x300
-		//  - 0x300 "arecibo.c"     // starting at addr 0x300, there is "arecibo.c"
-		//  - 0x400 NULL            // the previous "arecibo.c" ends at 0x400
-		//
-		// to this:
-		//
-		//  - 0x100 "middleville.c" // starting at addr 0x100, there is "middleville.c"
-		//  - 0x300 "arecibo.c"     // starting at addr 0x300, there is "arecibo.c"
-		//  - 0x400 NULL            // the previous "arecibo.c" ends at 0x400
-		//
-		// i.e. making sure there is most a single entry at a given address, cancelling out closing
-		// entries if a non-closing entry starts there at the same time removing redundant entries.
 		RzPVector sorter;
 		rz_pvector_init(&sorter, NULL);
-		RzBinSourceFile *initial_files = rz_vector_flush(&builder->files);
-		rz_pvector_reserve(&sorter, initial_files_count);
-		r->files_count = 0;
-		for (size_t i = 0; i < initial_files_count; i++) {
-			rz_pvector_push(&sorter, &initial_files[i]);
+		RzBinSourceLineSample *initial_samples = rz_vector_flush(&builder->samples);
+		rz_pvector_reserve(&sorter, initial_samples_count);
+		for (size_t i = 0; i < initial_samples_count; i++) {
+			rz_pvector_push(&sorter, &initial_samples[i]);
 		}
-		rz_pvector_sort(&sorter, file_cmp);
-		// the shadow tracks a sample that has just been considered at the current/previous
-		// address but that was swallowed by the sample before that in order to extend it.
-		// however we must still take this into account as new samples come in at the same address
-		// because if they have a lower priority than this shadowed sample, they must be skipped.
-		ut64 shadow_addr = UT64_MAX;
-		char *shadow_file = NULL;
-		for (size_t i = 0; i < initial_files_count; i++) {
-			RzBinSourceFile *new_file = rz_pvector_at(&sorter, i);
-			if (shadow_addr != UT64_MAX && shadow_addr == new_file->address && (!new_file->file || strcmp(shadow_file, new_file->file) >= 0)) {
-				// the shadow is stronger than this sample
-				free(new_file->file);
-				continue;
-			}
-			if (!r->files_count || r->files[r->files_count - 1].address != new_file->address) {
-				// new address, just move this entry to the final array, ...
-				if (r->files_count) {
-					RzBinSourceFile *prev = &r->files[r->files_count - 1];
-					if ((!prev->file && !new_file->file) || (prev->file && new_file->file && !strcmp(prev->file, new_file->file))) {
-						// ... unless it is identical to the previous
-						if (new_file->file) {
-							shadow_addr = new_file->address;
-							free(shadow_file);
-							shadow_file = new_file->file;
-						}
-						continue;
-					}
-				}
-				r->files[r->files_count++] = *new_file;
-			} else if (new_file->file) {
-				// same address as the previous and we are not a closing sample, decide how to resolve this...
-				RzBinSourceFile *prev = &r->files[r->files_count - 1];
-				if (!prev->file) {
-					// we bring the string!
-					if (r->files_count >= 2 && r->files[r->files_count - 2].file && !strcmp(r->files[r->files_count - 2].file, new_file->file)) {
-						// but actually we just cancel out the previous closing entry and
-						// continue the non-closing one before that.
-						r->files_count--;
-						shadow_addr = new_file->address;
-						free(shadow_file);
-						shadow_file = new_file->file;
-					} else {
-						prev->file = new_file->file;
-					}
-				} else if (strcmp(prev->file, new_file->file) < 0) {
-					// both have a string at the same address, but we only keep one.
-					// strcmp is used to resolve non-determinism from the unstable (possibly randomized) quicksort.
-					if (r->files_count >= 2 && r->files[r->files_count - 2].file && !strcmp(r->files[r->files_count - 2].file, new_file->file)) {
-						// if we would override here, we would have a redundant entry, so we just remove the previous
-						shadow_addr = new_file->address;
-						free(shadow_file);
-						shadow_file = new_file->file;
-						r->files_count--;
-						free(prev->file);
-					} else {
-						free(prev->file);
-						prev->file = new_file->file;
-					}
-				} else {
-					// same as above but we keep the other string.
-					free(new_file->file);
-				}
-			}
-		}
-		free(shadow_file);
-		if (r->files_count < initial_files_count) {
-			size_t news = r->files_count * sizeof(RzBinSourceFile);
-			if (news / sizeof(RzBinSourceFile) == r->files_count) {
-				RzBinSourceFile *nf = realloc(r->files, news);
-				if (nf) {
-					r->files = nf;
-				}
-			}
-		}
-		rz_pvector_fini(&sorter);
-		free(initial_files); // no need to do anything with the strings inside, they are all moved or freed.
-	}
+		rz_pvector_sort(&sorter, line_sample_cmp);
 
-	if (initial_lines_count) {
-		// Lines packing works slightly different than files.
-		// Samples at a certain address will never be dropped to extend a previous sample.
-		// That is because such a case does not seem very realistic for lines, as they are expected
-		// to fluctuate quite a lot whereas files often stay the same when functions from the same file
-		// are directly after each other.
-		RzPVector sorter;
-		rz_pvector_init(&sorter, NULL);
-		RzBinSourceLine *initial_lines = rz_vector_flush(&builder->lines);
-		rz_pvector_reserve(&sorter, initial_lines_count);
-		r->lines_count = 0;
-		for (size_t i = 0; i < initial_lines_count; i++) {
-			rz_pvector_push(&sorter, &initial_lines[i]);
-		}
-		rz_pvector_sort(&sorter, line_cmp);
-		for (size_t i = 0; i < initial_lines_count; i++) {
-			RzBinSourceLine *new_line = rz_pvector_at(&sorter, i);
-			if (!r->lines_count || r->lines[r->lines_count - 1].address != new_line->address) {
-				// new address, just move this entry to the final array
-				r->lines[r->lines_count++] = *new_line;
-			} else if (r->lines_count) {
-				// same address as the previous and we are not a closing sample, decide how to resolve this...
-				RzBinSourceLine *prev = &r->lines[r->lines_count - 1];
-				if (new_line->line > prev->line || (new_line->line == prev->line && new_line->column > prev->column)) {
-					// we supply the line!
-					// comparison is used to resolve non-determinism from the unstable (possibly randomized) quicksort.
-					*prev = *new_line;
+		r->samples_count = 0;
+		for (size_t i = 0; i < initial_samples_count; i++) {
+			RzBinSourceLineSample *new_sample = rz_pvector_at(&sorter, i);
+			if (r->samples_count) {
+				RzBinSourceLineSample *prev = &r->samples[r->samples_count - 1];
+				if (prev->address == new_sample->address && !new_sample->line) {
+					// closing sample but there are others that are not closing so this is dropped
+					continue;
 				}
 			}
+			r->samples[r->samples_count++] = *new_sample;
 		}
-		if (r->lines_count < initial_lines_count) {
-			size_t news = r->lines_count * sizeof(RzBinSourceLine);
-			if (news / sizeof(RzBinSourceLine) == r->lines_count) {
-				RzBinSourceLine *nf = realloc(r->lines, news);
-				if (nf) {
-					r->lines = nf;
-				}
-			}
-		}
-		rz_pvector_fini(&sorter);
-		free(initial_lines);
 	}
-
-	rz_bin_source_line_info_builder_fini(builder);
+	r->filename_pool = builder->filename_pool;
+	// don't call regular fini on the builder because we moved its string pool!
+	rz_vector_fini(&builder->samples);
 	return r;
-err_files:
-	free(r->files);
 err_r:
 	free(r);
 err:
@@ -254,44 +142,63 @@ RZ_API void rz_bin_source_line_info_free(RzBinSourceLineInfo *sli) {
 	if (!sli) {
 		return;
 	}
-	free(sli->lines);
-	free(sli->files);
+	free(sli->samples);
+	rz_str_constpool_fini(&sli->filename_pool);
 	free(sli);
 }
 
-#define binary_search_addr(r, prefix, addr) \
-	if (prefix##_count) { \
-		size_t l = 0; \
-		size_t h = prefix##_count; \
-		while (l < h - 1) { \
-			size_t m = l + ((h - l) >> 1); \
-			if (addr < prefix[m].address) { \
-				h = m; \
-			} else { \
-				l = m; \
-			} \
-		} \
-		r = (l < prefix##_count && prefix[l].address <= addr) ? &prefix[l] : NULL; \
+/**
+ * \brief Find the first sample that affects the given address.
+ * i.e. find the first sample with the highest address less or equal to addr.
+ * There may be more which can be retrieved by repeatedly calling rz_bin_source_line_info_get_next() until it returns NULL.
+ */
+RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_first_at(const RzBinSourceLineInfo *sli, ut64 addr) {
+	if (!sli->samples_count) {
+		return NULL;
 	}
-
-RZ_API const RzBinSourceFile *rz_bin_source_line_info_get_file_at(RzBinSourceLineInfo *sli, ut64 addr) {
-	RzBinSourceFile *r = NULL;
-	binary_search_addr(r, sli->files, addr);
-	if (r && r->file) {
-		// r->file == NULL would mean it's a closing entry which we don't want to return
-		return r;
+	// binary search
+	size_t l = 0;
+	size_t h = sli->samples_count;
+	while (l < h - 1) {
+		size_t m = l + ((h - l) >> 1);
+		if (addr < sli->samples[m].address) {
+			h = m;
+		} else {
+			l = m;
+		}
 	}
-	return NULL;
+	if (l >= sli->samples_count) {
+		return NULL;
+	}
+	RzBinSourceLineSample *r = &sli->samples[l];
+	if (r->address > addr) {
+		return NULL;
+	}
+	// walk back to the very first entry with this addr
+	while (r > sli->samples) {
+		if ((r - 1)->address == r->address) {
+			r--;
+		} else {
+			break;
+		}
+	}
+	return r;
 }
 
-RZ_API const RzBinSourceLine *rz_bin_source_line_info_get_line_at(RzBinSourceLineInfo *sli, ut64 addr) {
-	RzBinSourceLine *r = NULL;
-	binary_search_addr(r, sli->lines, addr);
-	if (r && r->line) {
-		// r->line == 0 would mean it's a closing entry which we don't want to return
-		return r;
+/**
+ * \param cur MUST be a pointer returned by either rz_bin_source_line_info_get_first_at() or rz_bin_source_line_info_get_next().
+ * \return The next sample at the same address as cur or NULL if there is none.
+ */
+RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_next(const RzBinSourceLineInfo *sli, const RzBinSourceLineSample *cur) {
+	rz_return_val_if_fail(sli && cur && cur >= sli->samples && cur < sli->samples + sli->samples_count, NULL);
+	if (cur < sli->samples + sli->samples_count - 1) {
+		return NULL;
 	}
-	return NULL;
+	const RzBinSourceLineSample *next = cur + 1;
+	if (next->address != cur->address) {
+		return NULL;
+	}
+	return next;
 }
 
 RZ_API bool rz_bin_addr2line(RzBin *bin, ut64 addr, char *file, int len, int *line) {
