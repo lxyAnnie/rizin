@@ -63,6 +63,9 @@ static int line_sample_cmp(const void *a, const void *b) {
 	if (!sa->line) {
 		return 1;
 	}
+	if (!sb->line) {
+		return -1;
+	}
 	// then sort by line
 	if (sa->line < sb->line) {
 		return -1;
@@ -171,7 +174,7 @@ RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_first_at(const R
 		return NULL;
 	}
 	RzBinSourceLineSample *r = &sli->samples[l];
-	if (r->address > addr) {
+	if (r->address > addr || !r->line) {
 		return NULL;
 	}
 	// walk back to the very first entry with this addr
@@ -189,9 +192,9 @@ RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_first_at(const R
  * \param cur MUST be a pointer returned by either rz_bin_source_line_info_get_first_at() or rz_bin_source_line_info_get_next().
  * \return The next sample at the same address as cur or NULL if there is none.
  */
-RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_next(const RzBinSourceLineInfo *sli, const RzBinSourceLineSample *cur) {
+RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_next(const RzBinSourceLineInfo *sli, RZ_NONNULL const RzBinSourceLineSample *cur) {
 	rz_return_val_if_fail(sli && cur && cur >= sli->samples && cur < sli->samples + sli->samples_count, NULL);
-	if (cur < sli->samples + sli->samples_count - 1) {
+	if (cur == sli->samples + sli->samples_count - 1) {
 		return NULL;
 	}
 	const RzBinSourceLineSample *next = cur + 1;

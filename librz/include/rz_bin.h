@@ -480,7 +480,7 @@ RZ_API RzBinSourceLineInfo *rz_bin_source_line_info_builder_build_and_fini(RzBin
 
 RZ_API void rz_bin_source_line_info_free(RzBinSourceLineInfo *sli);
 RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_first_at(const RzBinSourceLineInfo *sli, ut64 addr);
-RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_next(const RzBinSourceLineInfo *sli, const RzBinSourceLineSample *cur);
+RZ_API const RzBinSourceLineSample *rz_bin_source_line_info_get_next(const RzBinSourceLineInfo *sli, RZ_NONNULL const RzBinSourceLineSample *cur);
 
 // OLD!!!!!!!!!!
 typedef struct {
