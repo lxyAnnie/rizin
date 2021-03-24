@@ -348,13 +348,11 @@ static void ds_end_line_highlight(RDisasmState *ds);
 static bool line_highlighted(RDisasmState *ds);
 static int ds_print_shortcut(RDisasmState *ds, ut64 addr, int pos);
 
-
 // add for str issue
 int begin_mark = 0;
 char **markinst = NULL;
 int markinst_num = 0;
 char *inst_bufferstr = NULL;
-
 
 RZ_API ut64 rz_core_pava(RzCore *core, ut64 addr) {
 	if (core->print->pava) {
@@ -1097,7 +1095,7 @@ static void ds_build_op_str(RDisasmState *ds, bool print_color) {
 	}
 	ds->opstr = ds_sub_jumps(ds, ds->opstr);
 	// add for str issue
-	inst_bufferstr = (char *)malloc(sizeof(char)*(strlen(ds->opstr)+1));
+	inst_bufferstr = (char *)malloc(sizeof(char) * (strlen(ds->opstr) + 1));
 	strcpy(inst_bufferstr, ds->opstr);
 
 	if (ds->immtrim) {
@@ -1135,11 +1133,11 @@ static void ds_build_op_str(RDisasmState *ds, bool print_color) {
 			}
 		}
 		// add for str issue
-		if(begin_mark && markinst_num>1 && strstr(ds->opstr, "0x")){
+		if (begin_mark && markinst_num > 1 && strstr(ds->opstr, "0x")) {
 			//calculate: .got beginning addr - next inst addr
-			ut64 got_beginaddr=0;
-			ut64 rodata_beginaddr=0;
-			ut64 rodata_size=0;
+			ut64 got_beginaddr = 0;
+			ut64 rodata_beginaddr = 0;
+			ut64 rodata_size = 0;
 			ut64 next_instaddr = 0;
 
 			RzList *sections;
@@ -1147,20 +1145,20 @@ static void ds_build_op_str(RDisasmState *ds, bool print_color) {
 			RzBinSection *s;
 			RzListIter *iter;
 			rz_list_foreach (sections, iter, s) {
-				if(strcmp(s->name, ".got") == 0){
+				if (strcmp(s->name, ".got") == 0) {
 					got_beginaddr = s->vaddr;
 				}
-				if(strcmp(s->name, ".rodata") == 0){
+				if (strcmp(s->name, ".rodata") == 0) {
 					rodata_beginaddr = s->vaddr;
 					rodata_size = s->size;
 				}
 			}
-				
-			char *numstr = (char *)malloc(sizeof(char)*11);
-			memset(numstr, 0, sizeof(char)*11);
+
+			char *numstr = (char *)malloc(sizeof(char) * 11);
+			memset(numstr, 0, sizeof(char) * 11);
 			strncpy(numstr, markinst[1], 10);
-			sscanf(numstr,"%llx",&next_instaddr) ;
-			ut64 offset_got_next = (got_beginaddr>next_instaddr)? (got_beginaddr-next_instaddr): (next_instaddr-got_beginaddr);
+			sscanf(numstr, "%llx", &next_instaddr);
+			ut64 offset_got_next = (got_beginaddr > next_instaddr) ? (got_beginaddr - next_instaddr) : (next_instaddr - got_beginaddr);
 			char offset_got_next_str[11] = { 0 };
 			snprintf(offset_got_next_str, 11, "0x%llx", offset_got_next);
 			//printf("%llx %llx\n", got_beginaddr, next_instaddr);
@@ -1168,10 +1166,10 @@ static void ds_build_op_str(RDisasmState *ds, bool print_color) {
 			//calculate the offset range: [.got begin addr - .rodata end addr, .got begin addr - .rodata begin addr]
 			ut64 offset_got_str_1;
 			ut64 offset_got_str_2;
-			if(got_beginaddr > rodata_beginaddr){
+			if (got_beginaddr > rodata_beginaddr) {
 				offset_got_str_1 = got_beginaddr - rodata_beginaddr - rodata_size;
 				offset_got_str_2 = got_beginaddr - rodata_beginaddr;
-			}else{
+			} else {
 				offset_got_str_1 = rodata_beginaddr - got_beginaddr;
 				offset_got_str_2 = rodata_beginaddr - got_beginaddr + rodata_size;
 			}
@@ -1182,34 +1180,31 @@ static void ds_build_op_str(RDisasmState *ds, bool print_color) {
 			char eip_reg[4] = "eax";
 			eip_reg[1] = eip_reg[1] + begin_mark - 1;
 			char *inst;
-			for(int j=1; j<markinst_num; j++){		
+			for (int j = 1; j < markinst_num; j++) {
 				inst = markinst[j] + 11;
 				numstr = strstr(inst, offset_got_next_str);
-				if(numstr){
+				if (numstr) {
 					find_offset_got_next = true;
 					break;
 				}
 			}
-		
-			if(find_offset_got_next){
+
+			if (find_offset_got_next) {
 				ut64 str_addr = 0;
 				numstr = strstr(ds->opstr, "0x");
-				sscanf(numstr,"%llx",&str_addr) ;
-				if(str_addr <= offset_got_str_2 && str_addr >= offset_got_str_1){
-					if(got_beginaddr<rodata_beginaddr){
+				sscanf(numstr, "%llx", &str_addr);
+				if (str_addr <= offset_got_str_2 && str_addr >= offset_got_str_1) {
+					if (got_beginaddr < rodata_beginaddr) {
 						str_addr = got_beginaddr + str_addr;
-					}else{
+					} else {
 						str_addr = got_beginaddr - str_addr;
 					}
-					
-					if(find_offset_got_next){
-						RzFlagItem * str_flag = rz_flag_get_at(core->flags, str_addr, false);
-						// ds->opstr = (char *)realloc(ds->opstr, strlen(ds->opstr)+strlen(str_flag->name)+3);
-						// memset((ds->opstr) + strlen(ds->opstr), 0, strlen(str_flag->name)+3);
-						// snprintf((ds->opstr) + strlen(ds->opstr), strlen(str_flag->name)+3, " ;%s", str_flag->name);
-						ds->comment = (char *)malloc(sizeof(char)*(strlen(str_flag->name)+1));
-						memset(ds->comment, 0, strlen(str_flag->name)+1);
-						snprintf(ds->comment, strlen(str_flag->name)+3, "; %s", str_flag->name);
+
+					if (find_offset_got_next) {
+						RzFlagItem *str_flag = rz_flag_get_at(core->flags, str_addr, false);
+						ds->comment = (char *)malloc(sizeof(char) * (strlen(str_flag->name) + 1));
+						memset(ds->comment, 0, strlen(str_flag->name) + 1);
+						snprintf(ds->comment, strlen(str_flag->name) + 3, "; %s", str_flag->name);
 					}
 				}
 			}
@@ -5537,27 +5532,27 @@ toro:
 			ds_build_op_str(ds, true);
 			// add for str issue
 			char *find_getpc = strstr(inst_bufferstr, "__x86.get_pc_thunk.");
-			if(find_getpc != NULL){
-				if(begin_mark > 0){
+			if (find_getpc != NULL) {
+				if (begin_mark > 0) {
 					markinst_num = 0;
-				}else{
-					if(strstr(inst_bufferstr, "__x86.get_pc_thunk.ax")){
-						begin_mark=1;
-					}else if(strstr(inst_bufferstr, "__x86.get_pc_thunk.bx")){
-						begin_mark=2;
-					}else if(strstr(inst_bufferstr, "__x86.get_pc_thunk.cx")){
-						begin_mark=3;
-					}else if(strstr(inst_bufferstr, "__x86.get_pc_thunk.dx")){
-						begin_mark=4;
+				} else {
+					if (strstr(inst_bufferstr, "__x86.get_pc_thunk.ax")) {
+						begin_mark = 1;
+					} else if (strstr(inst_bufferstr, "__x86.get_pc_thunk.bx")) {
+						begin_mark = 2;
+					} else if (strstr(inst_bufferstr, "__x86.get_pc_thunk.cx")) {
+						begin_mark = 3;
+					} else if (strstr(inst_bufferstr, "__x86.get_pc_thunk.dx")) {
+						begin_mark = 4;
 					}
 				}
 			}
-			if(begin_mark > 0){
+			if (begin_mark > 0) {
 				markinst_num++;
 				markinst = (char **)realloc(markinst, sizeof(char *) * (markinst_num));
-				markinst[markinst_num-1] = (char *)malloc(sizeof(char) * (strlen(inst_bufferstr) + 22));
-				memset(markinst[markinst_num-1], 0, strlen(inst_bufferstr)+12);
-				snprintf(markinst[markinst_num-1], strlen(inst_bufferstr)+12, "0x%08llx %s", ds->vat, inst_bufferstr);				
+				markinst[markinst_num - 1] = (char *)malloc(sizeof(char) * (strlen(inst_bufferstr) + 22));
+				memset(markinst[markinst_num - 1], 0, strlen(inst_bufferstr) + 12);
+				snprintf(markinst[markinst_num - 1], strlen(inst_bufferstr) + 12, "0x%08llx %s", ds->vat, inst_bufferstr);
 			}
 
 			ds_print_opstr(ds);
