@@ -5536,15 +5536,7 @@ toro:
 				if (begin_mark > 0) {
 					markinst_num = 0;
 				} else {
-					if (strstr(inst_bufferstr, "__x86.get_pc_thunk.ax")) {
-						begin_mark = 1;
-					} else if (strstr(inst_bufferstr, "__x86.get_pc_thunk.bx")) {
-						begin_mark = 2;
-					} else if (strstr(inst_bufferstr, "__x86.get_pc_thunk.cx")) {
-						begin_mark = 3;
-					} else if (strstr(inst_bufferstr, "__x86.get_pc_thunk.dx")) {
-						begin_mark = 4;
-					}
+					begin_mark = 1;
 				}
 			}
 			if (begin_mark > 0) {
