@@ -5531,20 +5531,22 @@ toro:
 			ds_print_optype(ds);
 			ds_build_op_str(ds, true);
 			// add for str issue
-			char *find_getpc = strstr(inst_bufferstr, "__x86.get_pc_thunk.");
-			if (find_getpc != NULL) {
-				if (begin_mark > 0) {
-					markinst_num = 0;
-				} else {
-					begin_mark = 1;
+			if(rz_str_startswith(rz_config_get(core->config, "asm.arch"), "x86") && strcmp(rz_config_get(core->config, "asm.bits"), "32")==0){
+				char *find_getpc = strstr(inst_bufferstr, "__x86.get_pc_thunk.");
+				if (find_getpc != NULL) {
+					if (begin_mark > 0) {
+						markinst_num = 0;
+					} else {
+						begin_mark = 1;
+					}
 				}
-			}
-			if (begin_mark > 0) {
-				markinst_num++;
-				markinst = (char **)realloc(markinst, sizeof(char *) * (markinst_num));
-				markinst[markinst_num - 1] = (char *)malloc(sizeof(char) * (strlen(inst_bufferstr) + 22));
-				memset(markinst[markinst_num - 1], 0, strlen(inst_bufferstr) + 12);
-				snprintf(markinst[markinst_num - 1], strlen(inst_bufferstr) + 12, "0x%08llx %s", ds->vat, inst_bufferstr);
+				if (begin_mark > 0) {
+					markinst_num++;
+					markinst = (char **)realloc(markinst, sizeof(char *) * (markinst_num));
+					markinst[markinst_num - 1] = (char *)malloc(sizeof(char) * (strlen(inst_bufferstr) + 22));
+					memset(markinst[markinst_num - 1], 0, strlen(inst_bufferstr) + 12);
+					snprintf(markinst[markinst_num - 1], strlen(inst_bufferstr) + 12, "0x%08llx %s", ds->vat, inst_bufferstr);
+				}
 			}
 
 			ds_print_opstr(ds);
