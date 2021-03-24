@@ -5531,7 +5531,7 @@ toro:
 			ds_print_optype(ds);
 			ds_build_op_str(ds, true);
 			// add for str issue
-			if(rz_str_startswith(rz_config_get(core->config, "asm.arch"), "x86") && strcmp(rz_config_get(core->config, "asm.bits"), "32")==0){
+			if (rz_str_startswith(rz_config_get(core->config, "asm.arch"), "x86") && strcmp(rz_config_get(core->config, "asm.bits"), "32") == 0) {
 				char *find_getpc = strstr(inst_bufferstr, "__x86.get_pc_thunk.");
 				if (find_getpc != NULL) {
 					if (begin_mark > 0) {
